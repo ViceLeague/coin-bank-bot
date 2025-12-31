@@ -6,167 +6,163 @@ import { createClient } from "@supabase/supabase-js";
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// ENV Variables
-const {
-  DISCORD_TOKEN,
-  DISCORD_CLIENT_ID,
-  GUILD_ID,
-  SUPABASE_URL,
-  SUPABASE_SERVICE_ROLE_KEY
-} = process.env;
+// ENV setup
+const { DISCORD_TOKEN, DISCORD_CLIENT_ID, GUILD_ID, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY } = process.env;
 
 if (!DISCORD_TOKEN || !DISCORD_CLIENT_ID || !GUILD_ID || !SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-  console.error("❌ Missing one or more required environment variables.");
+  console.error("❌ Missing environment variables.");
   process.exit(1);
-} else {
-  console.log("✅ ENV looks good");
 }
 
-// Supabase Client
+console.log("✅ ENV variables loaded.");
+
+// Supabase client
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-// Discord Client
+// Discord client
 const client = new Client({
-  intents: [
-    GatewayIntentBits.Guilds,
-    GatewayIntentBits.GuildMessages,
-    GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMembers
-  ]
+  intents: [GatewayIntentBits.Guilds],
 });
 
 client.once("ready", async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
-  await registerCommands();
+  await registerSlashCommands();
 });
 
-// Slash Command Registration
-async function registerCommands() {
+// Register slash commands
+async function registerSlashCommands() {
+  console.log("🔁 Registering slash commands...");
+
   const commands = [
     new SlashCommandBuilder()
       .setName("balance")
-      .setDescription("Check your current coin balance"),
+      .setDescription("Check your coin balance."),
     new SlashCommandBuilder()
       .setName("addcoins")
-      .setDescription("Add coins to a user (admin only)")
+      .setDescription("Add coins to a user.")
       .addUserOption(option =>
-        option.setName("user").setDescription("User to add coins to").setRequired(true)
-      )
+        option.setName("user").setDescription("User to add coins to").setRequired(true))
       .addIntegerOption(option =>
-        option.setName("amount").setDescription("Amount of coins to add").setRequired(true)
-      ),
+        option.setName("amount").setDescription("Number of coins to add").setRequired(true)),
     new SlashCommandBuilder()
       .setName("usecoins")
-      .setDescription("Spend coins from your balance")
+      .setDescription("Spend your coins.")
       .addIntegerOption(option =>
-        option.setName("amount").setDescription("Amount to use").setRequired(true)
-      ),
+        option.setName("amount").setDescription("Amount to spend").setRequired(true)),
   ].map(cmd => cmd.toJSON());
 
   const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
-
   try {
-    console.log("🔁 Registering slash commands...");
     await rest.put(Routes.applicationGuildCommands(DISCORD_CLIENT_ID, GUILD_ID), { body: commands });
     console.log("✅ Slash commands registered.");
   } catch (error) {
-    console.error("❌ Failed to register commands:", error);
+    console.error("❌ Error registering commands:", error);
   }
 }
 
-// Handle Slash Commands
-client.on("interactionCreate", async interaction => {
+// Handle interactions
+client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
-  const { commandName } = interaction;
+
   const userId = interaction.user.id;
+  const guildId = interaction.guildId;
 
   try {
-    if (commandName === "balance") {
-      const { data, error } = await supabase
-        .from("coin_balances")
-        .select("balance")
-        .eq("user_id", userId)
-        .eq("guild_id", GUILD_ID)
-        .single();
+    switch (interaction.commandName) {
+      case "balance": {
+        const { data, error } = await supabase
+          .from("coin_balances")
+          .select("balance")
+          .eq("user_id", userId)
+          .eq("guild_id", guildId)
+          .single();
 
-      const balance = error || !data ? 0 : data.balance ?? 0;
+        console.log("Supabase /balance query result:", { data, error });
 
-      await interaction.reply({
-        content: `💰 Your balance is **${balance}** coins.`,
-        ephemeral: true,
-      });
-    }
+        const balance = error || !data ? 0 : data.balance;
 
-    if (commandName === "addcoins") {
-      const target = interaction.options.getUser("user", true);
-      const amount = interaction.options.getInteger("amount", true);
-
-      const { data } = await supabase
-        .from("coin_balances")
-        .select("balance")
-        .eq("user_id", target.id)
-        .eq("guild_id", GUILD_ID)
-        .single();
-
-      const current = data?.balance ?? 0;
-      const updated = current + amount;
-
-      await supabase.from("coin_balances").upsert({
-        user_id: target.id,
-        guild_id: GUILD_ID,
-        balance: updated,
-      });
-
-      await interaction.reply({
-        content: `✅ Added **${amount}** coins to ${target.tag}. New balance: **${updated}**`,
-        ephemeral: true,
-      });
-    }
-
-    if (commandName === "usecoins") {
-      const amount = interaction.options.getInteger("amount", true);
-
-      const { data } = await supabase
-        .from("coin_balances")
-        .select("balance")
-        .eq("user_id", userId)
-        .eq("guild_id", GUILD_ID)
-        .single();
-
-      const current = data?.balance ?? 0;
-
-      if (current < amount) {
-        return await interaction.reply({
-          content: `❌ You don't have enough coins. Current: **${current}**, Needed: **${amount}**`,
+        await interaction.reply({
+          content: `💰 You have **${balance}** coins.`,
           ephemeral: true,
         });
+        break;
       }
 
-      const updated = current - amount;
+      case "addcoins": {
+        const target = interaction.options.getUser("user");
+        const amount = interaction.options.getInteger("amount");
 
-      await supabase.from("coin_balances").upsert({
-        user_id: userId,
-        guild_id: GUILD_ID,
-        balance: updated,
-      });
+        const { data } = await supabase
+          .from("coin_balances")
+          .select("balance")
+          .eq("user_id", target.id)
+          .eq("guild_id", guildId)
+          .single();
 
-      await interaction.reply({
-        content: `✅ You used **${amount}** coins. Remaining: **${updated}**`,
-        ephemeral: true,
-      });
+        const newBalance = (data?.balance || 0) + amount;
+
+        await supabase.from("coin_balances").upsert({
+          user_id: target.id,
+          guild_id: guildId,
+          balance: newBalance,
+        });
+
+        await interaction.reply({
+          content: `✅ Added **${amount}** coins to ${target}. New balance: **${newBalance}**.`,
+          ephemeral: true,
+        });
+        break;
+      }
+
+      case "usecoins": {
+        const amount = interaction.options.getInteger("amount");
+
+        const { data } = await supabase
+          .from("coin_balances")
+          .select("balance")
+          .eq("user_id", userId)
+          .eq("guild_id", guildId)
+          .single();
+
+        const current = data?.balance || 0;
+
+        if (current < amount) {
+          await interaction.reply({
+            content: `❌ Not enough coins. You have **${current}**, but need **${amount}**.`,
+            ephemeral: true,
+          });
+          return;
+        }
+
+        const newBalance = current - amount;
+
+        await supabase.from("coin_balances").upsert({
+          user_id: userId,
+          guild_id: guildId,
+          balance: newBalance,
+        });
+
+        await interaction.reply({
+          content: `✅ You spent **${amount}** coins. Remaining: **${newBalance}**.`,
+          ephemeral: true,
+        });
+        break;
+      }
     }
   } catch (err) {
-    console.error("⚠️ Interaction Error:", err);
-    if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
+    console.error("⚠️ Interaction error:", err);
+    if (interaction.isRepliable()) {
       await interaction.reply({ content: "❌ An error occurred.", ephemeral: true });
     }
   }
 });
 
-// Express Keep-Alive
-app.get("/", (req, res) => res.send("Coin Bank Bot is running ✅"));
-app.listen(PORT, () => console.log(`🌐 Web server running on port ${PORT}`));
+// Express keep-alive
+app.get("/", (_, res) => res.send("✅ Coin Bank Bot is running!"));
+app.listen(PORT, () => {
+  console.log(`🌐 Express server live at http://localhost:${PORT}`);
+});
 
-// Login
-console.log("🔐 Logging in to Discord...");
+// Start bot
+console.log("🔐 Logging in...");
 client.login(DISCORD_TOKEN);
