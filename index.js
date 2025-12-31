@@ -1,4 +1,3 @@
-// index.js
 import "dotenv/config";
 import express from "express";
 import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } from "discord.js";
@@ -7,73 +6,82 @@ import { createClient } from "@supabase/supabase-js";
 const app = express();
 const PORT = process.env.PORT || 10000;
 
-// --- ENVIRONMENT VARIABLES ---
+// ENV Variables
 const {
   DISCORD_TOKEN,
   DISCORD_CLIENT_ID,
   GUILD_ID,
   SUPABASE_URL,
-  SUPABASE_SERVICE_ROLE_KEY,
+  SUPABASE_SERVICE_ROLE_KEY
 } = process.env;
 
 if (!DISCORD_TOKEN || !DISCORD_CLIENT_ID || !GUILD_ID || !SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY) {
-  console.error("❌ Missing environment variables.");
+  console.error("❌ Missing one or more required environment variables.");
   process.exit(1);
 } else {
   console.log("✅ ENV looks good");
 }
 
-// --- SUPABASE SETUP ---
+// Supabase Client
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-// --- DISCORD CLIENT SETUP ---
+// Discord Client
 const client = new Client({
-  intents: [GatewayIntentBits.Guilds],
+  intents: [
+    GatewayIntentBits.Guilds,
+    GatewayIntentBits.GuildMessages,
+    GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMembers
+  ]
 });
 
-client.once("ready", () => {
+client.once("ready", async () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
-  registerCommands(); // Only registers once bot is ready
+  await registerCommands();
 });
 
-// --- SLASH COMMAND REGISTRATION ---
+// Slash Command Registration
 async function registerCommands() {
-  console.log("🔁 Registering slash commands...");
-
   const commands = [
     new SlashCommandBuilder()
       .setName("balance")
-      .setDescription("Check your coin balance"),
+      .setDescription("Check your current coin balance"),
     new SlashCommandBuilder()
       .setName("addcoins")
       .setDescription("Add coins to a user (admin only)")
-      .addUserOption(opt => opt.setName("user").setDescription("Target user").setRequired(true))
-      .addIntegerOption(opt => opt.setName("amount").setDescription("Coins to add").setRequired(true)),
+      .addUserOption(option =>
+        option.setName("user").setDescription("User to add coins to").setRequired(true)
+      )
+      .addIntegerOption(option =>
+        option.setName("amount").setDescription("Amount of coins to add").setRequired(true)
+      ),
     new SlashCommandBuilder()
       .setName("usecoins")
-      .setDescription("Use your coins")
-      .addIntegerOption(opt => opt.setName("amount").setDescription("Coins to spend").setRequired(true)),
+      .setDescription("Spend coins from your balance")
+      .addIntegerOption(option =>
+        option.setName("amount").setDescription("Amount to use").setRequired(true)
+      ),
   ].map(cmd => cmd.toJSON());
 
+  const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
+
   try {
-    const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
-    await rest.put(Routes.applicationGuildCommands(DISCORD_CLIENT_ID, GUILD_ID), {
-      body: commands,
-    });
+    console.log("🔁 Registering slash commands...");
+    await rest.put(Routes.applicationGuildCommands(DISCORD_CLIENT_ID, GUILD_ID), { body: commands });
     console.log("✅ Slash commands registered.");
-  } catch (err) {
-    console.error("❌ Command registration failed:", err);
+  } catch (error) {
+    console.error("❌ Failed to register commands:", error);
   }
 }
 
-// --- INTERACTION HANDLER ---
-client.on("interactionCreate", async (interaction) => {
+// Handle Slash Commands
+client.on("interactionCreate", async interaction => {
   if (!interaction.isChatInputCommand()) return;
-
+  const { commandName } = interaction;
   const userId = interaction.user.id;
 
   try {
-    if (interaction.commandName === "balance") {
+    if (commandName === "balance") {
       const { data, error } = await supabase
         .from("coin_balances")
         .select("balance")
@@ -81,14 +89,15 @@ client.on("interactionCreate", async (interaction) => {
         .eq("guild_id", GUILD_ID)
         .single();
 
-      const balance = error || !data ? 0 : data.balance;
+      const balance = error || !data ? 0 : data.balance ?? 0;
 
       await interaction.reply({
-        content: `💰 You have **${balance}** coins.`,
+        content: `💰 Your balance is **${balance}** coins.`,
         ephemeral: true,
       });
+    }
 
-    } else if (interaction.commandName === "addcoins") {
+    if (commandName === "addcoins") {
       const target = interaction.options.getUser("user", true);
       const amount = interaction.options.getInteger("amount", true);
 
@@ -109,11 +118,12 @@ client.on("interactionCreate", async (interaction) => {
       });
 
       await interaction.reply({
-        content: `✅ Added **${amount}** coins to ${target.username}. New balance: **${updated}**.`,
+        content: `✅ Added **${amount}** coins to ${target.tag}. New balance: **${updated}**`,
         ephemeral: true,
       });
+    }
 
-    } else if (interaction.commandName === "usecoins") {
+    if (commandName === "usecoins") {
       const amount = interaction.options.getInteger("amount", true);
 
       const { data } = await supabase
@@ -124,14 +134,16 @@ client.on("interactionCreate", async (interaction) => {
         .single();
 
       const current = data?.balance ?? 0;
+
       if (current < amount) {
-        return interaction.reply({
-          content: `❌ You only have **${current}** coins, but you need **${amount}**.`,
+        return await interaction.reply({
+          content: `❌ You don't have enough coins. Current: **${current}**, Needed: **${amount}**`,
           ephemeral: true,
         });
       }
 
       const updated = current - amount;
+
       await supabase.from("coin_balances").upsert({
         user_id: userId,
         guild_id: GUILD_ID,
@@ -139,22 +151,22 @@ client.on("interactionCreate", async (interaction) => {
       });
 
       await interaction.reply({
-        content: `✅ You spent **${amount}** coins. Remaining: **${updated}**.`,
+        content: `✅ You used **${amount}** coins. Remaining: **${updated}**`,
         ephemeral: true,
       });
     }
   } catch (err) {
-    console.error("⚠️ Error in command handler:", err);
+    console.error("⚠️ Interaction Error:", err);
     if (interaction.isRepliable() && !interaction.replied && !interaction.deferred) {
-      await interaction.reply({ content: "❌ Something went wrong.", ephemeral: true });
+      await interaction.reply({ content: "❌ An error occurred.", ephemeral: true });
     }
   }
 });
 
-// --- KEEP RENDER ALIVE ---
+// Express Keep-Alive
 app.get("/", (req, res) => res.send("Coin Bank Bot is running ✅"));
 app.listen(PORT, () => console.log(`🌐 Web server running on port ${PORT}`));
 
-// --- LOGIN TO DISCORD ---
+// Login
 console.log("🔐 Logging in to Discord...");
 client.login(DISCORD_TOKEN);
