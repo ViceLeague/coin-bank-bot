@@ -21,19 +21,43 @@ const commands = [
       {
         name: "user",
         description: "User to add coins to",
-        type: 6,
+        type: 6, // USER
         required: true,
       },
       {
         name: "amount",
         description: "Amount of coins",
-        type: 4,
+        type: 4, // INTEGER
         required: true,
       },
       {
         name: "reason",
-        description: "Why you are giving them coins",
-        type: 3,
+        description: "Reason for adding coins",
+        type: 3, // STRING
+        required: false,
+      },
+    ],
+  },
+  {
+    name: "removecoins",
+    description: "Remove coins from a user (admin only)",
+    options: [
+      {
+        name: "user",
+        description: "User to remove coins from",
+        type: 6, // USER
+        required: true,
+      },
+      {
+        name: "amount",
+        description: "Amount of coins to remove",
+        type: 4, // INTEGER
+        required: true,
+      },
+      {
+        name: "reason",
+        description: "Reason for removing coins",
+        type: 3, // STRING
         required: false,
       },
     ],
@@ -51,30 +75,6 @@ const commands = [
       {
         name: "reason",
         description: "Reason (ex: PC Tournament Entry)",
-        type: 3,
-        required: false,
-      },
-    ],
-  },
-  {
-    name: "removecoins",
-    description: "Remove coins from a user (admin only)",
-    options: [
-      {
-        name: "user",
-        description: "User to remove coins from",
-        type: 6,
-        required: true,
-      },
-      {
-        name: "amount",
-        description: "Amount of coins",
-        type: 4,
-        required: true,
-      },
-      {
-        name: "reason",
-        description: "Why you are removing their coins",
         type: 3,
         required: false,
       },
