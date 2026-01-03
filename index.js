@@ -52,9 +52,12 @@ async function registerCommands() {
       .addStringOption(opt => opt.setName("reason").setDescription("Reason").setRequired(false)),
     new SlashCommandBuilder()
       .setName("usecoins")
-      .setDescription("Spend some of your coins")
+      .setDescription("Spend your coins")
       .addIntegerOption(opt => opt.setName("amount").setDescription("Amount").setRequired(true))
       .addStringOption(opt => opt.setName("reason").setDescription("Reason").setRequired(false)),
+    new SlashCommandBuilder()
+      .setName("transactions")
+      .setDescription("View your recent coin transactions"),
   ].map(cmd => cmd.toJSON());
 
   const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
@@ -121,12 +124,12 @@ client.on("interactionCreate", async (interaction) => {
         reason,
       });
 
-      return interaction.editReply(`✅ ${command === "addcoins" ? "Added" : "Removed"} **${amount}** coins from ${user}. New balance: **${newBalance}**`);
+      return interaction.editReply(`✅ ${command === "addcoins" ? "Added" : "Removed"} **${amount}** coins for ${user}. New balance: **${newBalance}**`);
     }
 
     if (command === "usecoins") {
       const amount = interaction.options.getInteger("amount", true);
-      const reason = interaction.options.getString("reason") || "used by user";
+      const reason = interaction.options.getString("reason") || "Used by user";
 
       const { data } = await supabase
         .from("coin_balances")
@@ -156,6 +159,26 @@ client.on("interactionCreate", async (interaction) => {
       });
 
       return interaction.editReply(`✅ You used **${amount}** coins. Remaining: **${newBalance}**`);
+    }
+
+    if (command === "transactions") {
+      const { data, error } = await supabase
+        .from("transactions")
+        .select("amount, reason, created_at")
+        .eq("user_id", userId)
+        .eq("guild_id", GUILD_ID)
+        .order("created_at", { ascending: false })
+        .limit(5);
+
+      if (error || !data || data.length === 0) {
+        return interaction.editReply("📭 No recent transactions found.");
+      }
+
+      const lines = data.map(tx =>
+        `• ${tx.amount > 0 ? "🟢" : "🔴"} **${tx.amount}** coins — _${tx.reason}_\n🕒 <t:${Math.floor(new Date(tx.created_at).getTime() / 1000)}:R>`
+      );
+
+      return interaction.editReply(`📜 **Your Recent Transactions:**\n${lines.join("\n\n")}`);
     }
 
     return interaction.editReply("❌ Unknown command.");
