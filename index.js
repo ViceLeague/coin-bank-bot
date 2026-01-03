@@ -3,57 +3,62 @@ import express from "express";
 import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } from "discord.js";
 import { createClient } from "@supabase/supabase-js";
 
-// --- Setup Express for keep-alive ---
 const app = express();
 const PORT = process.env.PORT || 10000;
-app.get("/", (_, res) => res.send("✅ Coin Bank Bot is running."));
-app.listen(PORT, () => console.log(`🌐 Web server running on port ${PORT}`));
 
-// --- Load environment variables ---
 const {
   DISCORD_TOKEN,
   GUILD_ID,
   DISCORD_CLIENT_ID,
   SUPABASE_URL,
   SUPABASE_SERVICE_ROLE_KEY,
-  ADMIN_IDS // comma-separated Discord user IDs of admins
+  ADMIN_IDS,
 } = process.env;
 
-if (!DISCORD_TOKEN || !GUILD_ID || !SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !DISCORD_CLIENT_ID) {
-  console.error("❌ Missing required environment variables.");
+if (!DISCORD_TOKEN || !GUILD_ID || !SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !DISCORD_CLIENT_ID || !ADMIN_IDS) {
+  console.error("❌ Missing environment variables.");
   process.exit(1);
+} else {
+  console.log("✅ ENV variables loaded");
 }
 
-const adminIds = ADMIN_IDS ? ADMIN_IDS.split(",") : [];
-
-// --- Supabase Setup ---
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
 
-// --- Discord Client Setup ---
 const client = new Client({
   intents: [GatewayIntentBits.Guilds],
 });
 
-// --- Register Commands ---
-const commands = [
-  new SlashCommandBuilder()
-    .setName("balance")
-    .setDescription("Check your current coin balance"),
-  new SlashCommandBuilder()
-    .setName("addcoins")
-    .setDescription("Admins: Add coins to a user")
-    .addUserOption(opt => opt.setName("user").setDescription("User").setRequired(true))
-    .addIntegerOption(opt => opt.setName("amount").setDescription("Amount").setRequired(true)),
-  new SlashCommandBuilder()
-    .setName("usecoins")
-    .setDescription("Spend coins")
-    .addIntegerOption(opt => opt.setName("amount").setDescription("Amount").setRequired(true))
-].map(cmd => cmd.toJSON());
+client.once("ready", () => {
+  console.log(`✅ Logged in as ${client.user.tag}`);
+  registerCommands();
+});
 
-const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
-
-// --- Register Slash Commands ---
 async function registerCommands() {
+  console.log("🔁 Registering slash commands...");
+
+  const commands = [
+    new SlashCommandBuilder().setName("balance").setDescription("Check your current coin balance"),
+    new SlashCommandBuilder()
+      .setName("addcoins")
+      .setDescription("Add coins to a user (admin only)")
+      .addUserOption(opt => opt.setName("user").setDescription("User").setRequired(true))
+      .addIntegerOption(opt => opt.setName("amount").setDescription("Amount").setRequired(true))
+      .addStringOption(opt => opt.setName("reason").setDescription("Reason").setRequired(false)),
+    new SlashCommandBuilder()
+      .setName("removecoins")
+      .setDescription("Remove coins from a user (admin only)")
+      .addUserOption(opt => opt.setName("user").setDescription("User").setRequired(true))
+      .addIntegerOption(opt => opt.setName("amount").setDescription("Amount").setRequired(true))
+      .addStringOption(opt => opt.setName("reason").setDescription("Reason").setRequired(false)),
+    new SlashCommandBuilder()
+      .setName("usecoins")
+      .setDescription("Spend some of your coins")
+      .addIntegerOption(opt => opt.setName("amount").setDescription("Amount").setRequired(true))
+      .addStringOption(opt => opt.setName("reason").setDescription("Reason").setRequired(false)),
+  ].map(cmd => cmd.toJSON());
+
+  const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
+
   try {
     await rest.put(Routes.applicationGuildCommands(DISCORD_CLIENT_ID, GUILD_ID), { body: commands });
     console.log("✅ Slash commands registered.");
@@ -62,18 +67,17 @@ async function registerCommands() {
   }
 }
 
-// --- Handle Commands ---
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
-  const { commandName, user, options } = interaction;
-  const userId = user.id;
+  const command = interaction.commandName;
+  const userId = interaction.user.id;
+  const adminList = ADMIN_IDS.split(",");
 
   try {
     await interaction.deferReply({ ephemeral: true });
 
-    // --- /balance ---
-    if (commandName === "balance") {
+    if (command === "balance") {
       const { data, error } = await supabase
         .from("coin_balances")
         .select("balance")
@@ -85,37 +89,44 @@ client.on("interactionCreate", async (interaction) => {
       return interaction.editReply(`💰 Your balance is **${balance}** coins.`);
     }
 
-    // --- /addcoins ---
-    if (commandName === "addcoins") {
-      if (!adminIds.includes(userId)) {
+    if (["addcoins", "removecoins"].includes(command)) {
+      if (!adminList.includes(userId)) {
         return interaction.editReply("❌ You do not have permission to use this command.");
       }
 
-      const target = options.getUser("user", true);
-      const amount = options.getInteger("amount", true);
+      const user = interaction.options.getUser("user", true);
+      const amount = interaction.options.getInteger("amount", true);
+      const reason = interaction.options.getString("reason") || `${command} by admin`;
 
       const { data } = await supabase
         .from("coin_balances")
         .select("balance")
-        .eq("user_id", target.id)
+        .eq("user_id", user.id)
         .eq("guild_id", GUILD_ID)
         .single();
 
       const current = data?.balance ?? 0;
-      const newBalance = current + amount;
+      const newBalance = command === "addcoins" ? current + amount : Math.max(current - amount, 0);
 
       await supabase.from("coin_balances").upsert({
-        user_id: target.id,
+        user_id: user.id,
         guild_id: GUILD_ID,
         balance: newBalance,
       });
 
-      return interaction.editReply(`✅ Added **${amount}** coins to ${target.username}. New balance: **${newBalance}**.`);
+      await supabase.from("transactions").insert({
+        user_id: user.id,
+        guild_id: GUILD_ID,
+        amount: command === "addcoins" ? amount : -amount,
+        reason,
+      });
+
+      return interaction.editReply(`✅ ${command === "addcoins" ? "Added" : "Removed"} **${amount}** coins from ${user}. New balance: **${newBalance}**`);
     }
 
-    // --- /usecoins ---
-    if (commandName === "usecoins") {
-      const amount = options.getInteger("amount", true);
+    if (command === "usecoins") {
+      const amount = interaction.options.getInteger("amount", true);
+      const reason = interaction.options.getString("reason") || "used by user";
 
       const { data } = await supabase
         .from("coin_balances")
@@ -137,7 +148,14 @@ client.on("interactionCreate", async (interaction) => {
         balance: newBalance,
       });
 
-      return interaction.editReply(`✅ You used **${amount}** coins. Remaining: **${newBalance}**.`);
+      await supabase.from("transactions").insert({
+        user_id: userId,
+        guild_id: GUILD_ID,
+        amount: -amount,
+        reason,
+      });
+
+      return interaction.editReply(`✅ You used **${amount}** coins. Remaining: **${newBalance}**`);
     }
 
     return interaction.editReply("❌ Unknown command.");
@@ -145,16 +163,15 @@ client.on("interactionCreate", async (interaction) => {
     console.error("⚠️ Command Error:", err);
     if (interaction.isRepliable()) {
       try {
-        await interaction.editReply("❌ Something went wrong.");
+        await interaction.editReply("❌ Something went wrong. Try again later.");
       } catch {}
     }
   }
 });
 
-// --- Start Bot ---
-client.once("ready", () => {
-  console.log(`✅ Logged in as ${client.user.tag}`);
-  registerCommands();
-});
+// Keep Alive
+app.get("/", (req, res) => res.send("Coin Bank Bot is running ✅"));
+app.listen(PORT, () => console.log(`🌐 Web server running on port ${PORT}`));
 
+// Login
 client.login(DISCORD_TOKEN);
