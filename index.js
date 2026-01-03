@@ -1,237 +1,208 @@
-import "dotenv/config";
-import express from "express";
-import { Client, GatewayIntentBits, EmbedBuilder } from "discord.js";
-import { createClient } from "@supabase/supabase-js";
-
-const app = express();
-const PORT = process.env.PORT || 10000;
-
-const {
-  DISCORD_TOKEN,
-  GUILD_ID,
-  SUPABASE_URL,
-  SUPABASE_KEY,
-  ADMIN_IDS,
-  BUYER_ROLE_ID,
-} = process.env;
-
-const ADMIN_LIST = ADMIN_IDS.split(",");
-
-const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+// index.js
+import { Client, GatewayIntentBits, Partials, EmbedBuilder } from 'discord.js';
+import { createClient } from '@supabase/supabase-js';
+import express from 'express';
+import 'dotenv/config';
 
 const client = new Client({
   intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMembers],
+  partials: [Partials.GuildMember],
 });
 
-client.once("ready", () => {
+const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
+const ADMIN_IDS = process.env.ADMIN_IDS.split(',');
+const BUYER_ROLE_ID = process.env.BUYER_ROLE_ID;
+
+client.once('ready', () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
 });
 
-client.on("interactionCreate", async (interaction) => {
+client.on('interactionCreate', async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
-  const command = interaction.commandName;
-  const guildId = interaction.guild.id;
   const userId = interaction.user.id;
+  const username = interaction.user.username;
+  const guildId = interaction.guildId;
 
   try {
-    await interaction.deferReply({ ephemeral: true });
-
-    /* ===================== BALANCE ===================== */
-    if (command === "balance") {
-      const { data } = await supabase
-        .from("coin_balances")
-        .select("balance")
-        .eq("guild_id", guildId)
-        .eq("user_id", userId)
+    if (interaction.commandName === 'balance') {
+      const { data, error } = await supabase
+        .from('coin_balances')
+        .select('balance')
+        .eq('user_id', userId)
+        .eq('guild_id', guildId)
         .single();
 
-      return interaction.editReply(
-        `💰 Your balance is **${data?.balance ?? 0}** coins`
-      );
+      const balance = error || !data ? 0 : data.balance;
+      return interaction.reply({ content: `You have **${balance}** coins.`, ephemeral: true });
     }
 
-    /* ===================== ADD / REMOVE COINS ===================== */
-    if (["addcoins", "removecoins"].includes(command)) {
-      if (!ADMIN_LIST.includes(userId))
-        return interaction.editReply("❌ Admin only command.");
+    if (interaction.commandName === 'addcoins') {
+      if (!ADMIN_IDS.includes(userId)) return interaction.reply({ content: '❌ Admins only.', ephemeral: true });
 
-      const target = interaction.options.getUser("user", true);
-      const amount = interaction.options.getInteger("amount", true);
-      const reason =
-        interaction.options.getString("reason") || `${command} by admin`;
+      const target = interaction.options.getUser('user');
+      const amount = interaction.options.getInteger('amount');
+      const reason = interaction.options.getString('reason') || 'No reason provided';
 
-      const { data } = await supabase
-        .from("coin_balances")
-        .select("balance")
-        .eq("guild_id", guildId)
-        .eq("user_id", target.id)
+      const { data: existing } = await supabase
+        .from('coin_balances')
+        .select('balance')
+        .eq('user_id', target.id)
+        .eq('guild_id', guildId)
         .single();
 
-      const starting = data?.balance ?? 0;
-      const ending =
-        command === "addcoins"
-          ? starting + amount
-          : Math.max(starting - amount, 0);
+      const newBalance = (existing?.balance || 0) + amount;
 
-      await supabase.from("coin_balances").upsert({
-        guild_id: guildId,
+      await supabase.from('coin_balances').upsert({
         user_id: target.id,
-        balance: ending,
+        guild_id: guildId,
+        balance: newBalance,
       });
 
-      await supabase.from("transactions").insert({
-        guild_id: guildId,
+      await supabase.from('transactions').insert({
         user_id: target.id,
-        amount: command === "addcoins" ? amount : -amount,
+        guild_id: guildId,
+        amount,
         reason,
-        starting_balance: starting,
-        ending_balance: ending,
+        added_by: userId,
       });
 
-      return interaction.editReply(
-        `✅ ${command === "addcoins" ? "Added" : "Removed"} **${amount}** coins for <@${target.id}>\n` +
-        `📊 **${starting} → ${ending}**`
-      );
+      return interaction.reply({ content: `✅ Added **${amount}** coins to <@${target.id}>. New balance: **${newBalance}**`, ephemeral: true });
     }
 
-    /* ===================== USE COINS ===================== */
-    if (command === "usecoins") {
-      const amount = interaction.options.getInteger("amount", true);
-      const reason =
-        interaction.options.getString("reason") || "Used coins";
+    if (interaction.commandName === 'removecoins') {
+      if (!ADMIN_IDS.includes(userId)) return interaction.reply({ content: '❌ Admins only.', ephemeral: true });
 
-      const { data } = await supabase
-        .from("coin_balances")
-        .select("balance")
-        .eq("guild_id", guildId)
-        .eq("user_id", userId)
+      const target = interaction.options.getUser('user');
+      const amount = interaction.options.getInteger('amount');
+      const reason = interaction.options.getString('reason') || 'No reason provided';
+
+      const { data: existing } = await supabase
+        .from('coin_balances')
+        .select('balance')
+        .eq('user_id', target.id)
+        .eq('guild_id', guildId)
         .single();
 
-      const starting = data?.balance ?? 0;
-      if (starting < amount)
-        return interaction.editReply("❌ Not enough coins.");
+      const newBalance = Math.max((existing?.balance || 0) - amount, 0);
 
-      const ending = starting - amount;
-
-      await supabase.from("coin_balances").upsert({
+      await supabase.from('coin_balances').upsert({
+        user_id: target.id,
         guild_id: guildId,
-        user_id: userId,
-        balance: ending,
+        balance: newBalance,
       });
 
-      await supabase.from("transactions").insert({
+      await supabase.from('transactions').insert({
+        user_id: target.id,
         guild_id: guildId,
-        user_id: userId,
         amount: -amount,
         reason,
-        starting_balance: starting,
-        ending_balance: ending,
+        added_by: userId,
       });
 
-      return interaction.editReply(
-        `✅ Used **${amount}** coins\n📊 **${starting} → ${ending}**`
-      );
+      return interaction.reply({ content: `✅ Removed **${amount}** coins from <@${target.id}>. New balance: **${newBalance}**`, ephemeral: true });
     }
 
-    /* ===================== TRANSACTIONS (SELF) ===================== */
-    if (command === "transactions") {
+    if (interaction.commandName === 'transactions') {
       const { data } = await supabase
-        .from("transactions")
-        .select("*")
-        .eq("guild_id", guildId)
-        .eq("user_id", userId)
-        .order("created_at", { ascending: false })
+        .from('transactions')
+        .select('*')
+        .eq('user_id', userId)
+        .eq('guild_id', guildId)
+        .order('created_at', { ascending: false })
         .limit(5);
 
-      if (!data || data.length === 0)
-        return interaction.editReply("📭 No transactions found.");
+      if (!data || data.length === 0) {
+        return interaction.reply({ content: '📍 No transactions found.', ephemeral: true });
+      }
 
       const embed = new EmbedBuilder()
-        .setTitle("📜 Your Transactions")
-        .setColor(0x00ff99)
+        .setTitle('🧾 Your Recent Transactions:')
+        .setColor('Gold')
         .setDescription(
-          data
-            .map(
-              (t) =>
-                `${t.amount > 0 ? "🟢" : "🔴"} **${t.amount}** coins\n` +
-                `📊 ${t.starting_balance} → ${t.ending_balance}\n` +
-                `📝 ${t.reason}\n` +
-                `🕒 <t:${Math.floor(
-                  new Date(t.created_at).getTime() / 1000
-                )}:R>`
-            )
-            .join("\n\n")
+          data.map(tx => {
+            const emoji = tx.amount < 0 ? '🔴' : '🟢';
+            return `${emoji} **${tx.amount}** coins — _${tx.reason}_ by <@${tx.added_by}>\n🕓 <t:${Math.floor(new Date(tx.created_at).getTime() / 1000)}:R>`;
+          }).join('\n\n')
         );
 
-      return interaction.editReply({ embeds: [embed] });
+      return interaction.reply({ embeds: [embed], ephemeral: true });
     }
 
-    /* ===================== CHECK COINS (ADMIN) ===================== */
-    if (command === "checkcoins") {
-      if (!ADMIN_LIST.includes(userId))
-        return interaction.editReply("❌ Admin only.");
+    if (interaction.commandName === 'checkcoins') {
+      if (!ADMIN_IDS.includes(userId)) return interaction.reply({ content: '❌ Admins only.', ephemeral: true });
 
-      const target = interaction.options.getUser("user", true);
+      const target = interaction.options.getUser('user');
 
-      const { data } = await supabase
-        .from("coin_balances")
-        .select("balance")
-        .eq("guild_id", guildId)
-        .eq("user_id", target.id)
+      const { data, error } = await supabase
+        .from('coin_balances')
+        .select('balance')
+        .eq('user_id', target.id)
+        .eq('guild_id', guildId)
         .single();
 
-      return interaction.editReply(
-        `👤 <@${target.id}> has **${data?.balance ?? 0}** coins`
-      );
+      const balance = error || !data ? 0 : data.balance;
+      return interaction.reply({ content: `${target.username} has **${balance}** coins.`, ephemeral: true });
     }
 
-    /* ===================== USER TRANSACTIONS (ADMIN) ===================== */
-    if (command === "usertransactions") {
-      if (!ADMIN_LIST.includes(userId))
-        return interaction.editReply("❌ Admin only.");
+    if (interaction.commandName === 'usertransactions') {
+      if (!ADMIN_IDS.includes(userId)) return interaction.reply({ content: '❌ Admins only.', ephemeral: true });
 
-      const target = interaction.options.getUser("user", true);
+      const target = interaction.options.getUser('user');
 
       const { data } = await supabase
-        .from("transactions")
-        .select("*")
-        .eq("guild_id", guildId)
-        .eq("user_id", target.id)
-        .order("created_at", { ascending: false })
+        .from('transactions')
+        .select('*')
+        .eq('user_id', target.id)
+        .eq('guild_id', guildId)
+        .order('created_at', { ascending: false })
         .limit(5);
 
-      if (!data || data.length === 0)
-        return interaction.editReply("📭 No transactions found.");
+      if (!data || data.length === 0) {
+        return interaction.reply({ content: `📍 No transactions found for ${target.username}.`, ephemeral: true });
+      }
 
       const embed = new EmbedBuilder()
-        .setTitle(`📜 Transactions for ${target.username}`)
-        .setColor(0xffcc00)
+        .setTitle(`📒 Recent Transactions for ${target.username}`)
+        .setColor('Aqua')
         .setDescription(
-          data
-            .map(
-              (t) =>
-                `${t.amount > 0 ? "🟢" : "🔴"} **${t.amount}** coins\n` +
-                `📊 ${t.starting_balance} → ${t.ending_balance}\n` +
-                `📝 ${t.reason}\n` +
-                `🕒 <t:${Math.floor(
-                  new Date(t.created_at).getTime() / 1000
-                )}:R>`
-            )
-            .join("\n\n")
+          data.map(tx => {
+            const emoji = tx.amount < 0 ? '🔴' : '🟢';
+            return `${emoji} **${tx.amount}** coins — _${tx.reason}_ by <@${tx.added_by}>\n🕓 <t:${Math.floor(new Date(tx.created_at).getTime() / 1000)}:R>`;
+          }).join('\n\n')
         );
 
-      return interaction.editReply({ embeds: [embed] });
+      return interaction.reply({ embeds: [embed], ephemeral: true });
     }
 
+    if (interaction.commandName === 'clearbuyers') {
+      if (!ADMIN_IDS.includes(userId)) return interaction.reply({ content: '❌ Admins only.', ephemeral: true });
+
+      const guild = interaction.guild;
+      const role = guild.roles.cache.get(BUYER_ROLE_ID);
+      if (!role) return interaction.reply({ content: '❌ Buyer role not found.', ephemeral: true });
+
+      const members = await guild.members.fetch();
+      const affected = [];
+
+      for (const member of members.values()) {
+        if (member.roles.cache.has(BUYER_ROLE_ID)) {
+          await member.roles.remove(BUYER_ROLE_ID);
+          affected.push(member.user.username);
+        }
+      }
+
+      return interaction.reply({ content: `✅ Cleared Buyer role from ${affected.length} users.`, ephemeral: true });
+    }
   } catch (err) {
-    console.error(err);
-    return interaction.editReply("❌ Error processing command.");
+    console.error('❌ Interaction Error:', err);
+    return interaction.reply({ content: '⚠️ Something went wrong. Check the logs.', ephemeral: true });
   }
 });
 
-/* KEEP ALIVE */
-app.get("/", (_, res) => res.send("Coin Bank Bot is running"));
-app.listen(PORT, () => console.log(`🌐 Server on ${PORT}`));
+client.login(process.env.DISCORD_TOKEN);
 
-client.login(DISCORD_TOKEN);
+// Keep-alive server
+const app = express();
+app.get('/', (_, res) => res.send('Coin Bank is online!'));
+app.listen(10000, () => console.log('🌐 Web server on 10000'));
