@@ -1,4 +1,5 @@
 import { REST, Routes } from "discord.js";
+import "dotenv/config";
 
 const token = process.env.DISCORD_TOKEN;
 const clientId = process.env.DISCORD_CLIENT_ID;
@@ -45,40 +46,44 @@ const commands = [
       {
         name: "user",
         description: "User to remove coins from",
-        type: 6, // USER
+        type: 6,
         required: true,
       },
       {
         name: "amount",
         description: "Amount of coins to remove",
-        type: 4, // INTEGER
+        type: 4,
         required: true,
       },
       {
         name: "reason",
         description: "Reason for removing coins",
-        type: 3, // STRING
+        type: 3,
         required: false,
       },
     ],
   },
   {
     name: "usecoins",
-    description: "Spend coins (tournament entry)",
+    description: "Spend your coins (tournament entry, etc.)",
     options: [
       {
         name: "amount",
-        description: "Amount of coins to spend",
-        type: 4, // INTEGER
+        description: "Amount of coins to use",
+        type: 4,
         required: true,
       },
       {
         name: "reason",
-        description: "Reason (ex: PC Tournament Entry)",
-        type: 3, // STRING
+        description: "Reason for spending coins (optional)",
+        type: 3,
         required: false,
       },
     ],
+  },
+  {
+    name: "transactions",
+    description: "See your last 10 transactions with date/time",
   },
 ];
 
@@ -87,10 +92,9 @@ const rest = new REST({ version: "10" }).setToken(token);
 (async () => {
   try {
     console.log("🔁 Registering slash commands...");
-    await rest.put(
-      Routes.applicationGuildCommands(clientId, guildId),
-      { body: commands }
-    );
+    await rest.put(Routes.applicationGuildCommands(clientId, guildId), {
+      body: commands,
+    });
     console.log("✅ Slash commands registered!");
     process.exit(0);
   } catch (err) {
