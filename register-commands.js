@@ -1,59 +1,71 @@
 import { REST, Routes } from "discord.js";
+import "dotenv/config";
 
-const token = process.env.DISCORD_TOKEN;
-const clientId = process.env.DISCORD_CLIENT_ID;
-const guildId = process.env.GUILD_ID;
+const { DISCORD_TOKEN, DISCORD_CLIENT_ID, GUILD_ID } = process.env;
 
-if (!token || !clientId || !guildId) {
-  console.error("Missing env vars");
+if (!DISCORD_TOKEN || !DISCORD_CLIENT_ID || !GUILD_ID) {
+  console.error("Missing env vars.");
   process.exit(1);
 }
 
 const commands = [
-  { name: "balance", description: "Check your coin balance" },
-
+  {
+    name: "balance",
+    description: "Check your coin balance",
+  },
   {
     name: "addcoins",
     description: "Add coins to a user (admin only)",
     options: [
-      { name: "user", description: "User", type: 6, required: true },
-      { name: "amount", description: "Amount", type: 4, required: true },
-      { name: "reason", description: "Reason", type: 3, required: false },
+      { name: "user", type: 6, description: "User", required: true },
+      { name: "amount", type: 4, description: "Amount", required: true },
+      { name: "reason", type: 3, description: "Reason", required: false },
     ],
   },
-
   {
     name: "removecoins",
     description: "Remove coins from a user (admin only)",
     options: [
-      { name: "user", description: "User", type: 6, required: true },
-      { name: "amount", description: "Amount", type: 4, required: true },
-      { name: "reason", description: "Reason", type: 3, required: false },
+      { name: "user", type: 6, description: "User", required: true },
+      { name: "amount", type: 4, description: "Amount", required: true },
+      { name: "reason", type: 3, description: "Reason", required: false },
     ],
   },
-
   {
     name: "usecoins",
-    description: "Spend some of your coins",
+    description: "Spend your coins",
     options: [
-      { name: "amount", description: "Amount", type: 4, required: true },
-      { name: "reason", description: "Reason", type: 3, required: false },
+      { name: "amount", type: 4, description: "Amount to spend", required: true },
+      { name: "reason", type: 3, description: "Reason", required: false },
     ],
   },
-
   {
     name: "transactions",
-    description: "View recent coin activity",
+    description: "View your recent coin activity",
+  },
+  {
+    name: "checkcoins",
+    description: "Admin: Check a user’s coin balance",
+    options: [{ name: "user", type: 6, description: "User", required: true }],
+  },
+  {
+    name: "usertransactions",
+    description: "Admin: View a user’s recent transactions",
+    options: [{ name: "user", type: 6, description: "User", required: true }],
   },
 ];
 
-const rest = new REST({ version: "10" }).setToken(token);
+const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
 
 (async () => {
-  console.log("Registering slash commands...");
-  await rest.put(Routes.applicationGuildCommands(clientId, guildId), {
-    body: commands,
-  });
-  console.log("✅ Slash commands registered");
-  process.exit(0);
+  try {
+    console.log("⏳ Registering commands...");
+    await rest.put(Routes.applicationGuildCommands(DISCORD_CLIENT_ID, GUILD_ID), { body: commands });
+    console.log("✅ Commands registered!");
+    process.exit(0);
+  } catch (err) {
+    console.error("❌ Failed to register commands:", err);
+    process.exit(1);
+  }
 })();
+
