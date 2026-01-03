@@ -1,6 +1,6 @@
 import "dotenv/config";
 import express from "express";
-import { Client, GatewayIntentBits } from "discord.js";
+import { Client, GatewayIntentBits, REST, Routes, SlashCommandBuilder } from "discord.js";
 import { createClient } from "@supabase/supabase-js";
 
 const app = express();
@@ -8,177 +8,230 @@ const PORT = process.env.PORT || 10000;
 
 const {
   DISCORD_TOKEN,
-  DISCORD_CLIENT_ID,
   GUILD_ID,
+  DISCORD_CLIENT_ID,
   SUPABASE_URL,
   SUPABASE_SERVICE_ROLE_KEY,
   ADMIN_IDS,
 } = process.env;
 
-if (!DISCORD_TOKEN || !DISCORD_CLIENT_ID || !GUILD_ID || !SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !ADMIN_IDS) {
-  console.error("❌ Missing environment variables");
+if (!DISCORD_TOKEN || !GUILD_ID || !SUPABASE_URL || !SUPABASE_SERVICE_ROLE_KEY || !DISCORD_CLIENT_ID || !ADMIN_IDS) {
+  console.error("❌ Missing environment variables.");
   process.exit(1);
 }
 
-console.log("✅ ENV variables loaded");
-
-// Supabase
 const supabase = createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY);
-
-// Discord
-const client = new Client({
-  intents: [GatewayIntentBits.Guilds],
-});
-
+const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 const adminList = ADMIN_IDS.split(",");
 
 client.once("ready", () => {
   console.log(`✅ Logged in as ${client.user.tag}`);
+  registerCommands();
 });
 
-// ---------- INTERACTIONS ----------
+async function registerCommands() {
+  const commands = [
+    new SlashCommandBuilder().setName("balance").setDescription("Check your current coin balance"),
+    new SlashCommandBuilder()
+      .setName("addcoins")
+      .setDescription("Add coins to a user (admin only)")
+      .addUserOption(opt => opt.setName("user").setDescription("User").setRequired(true))
+      .addIntegerOption(opt => opt.setName("amount").setDescription("Amount").setRequired(true))
+      .addStringOption(opt => opt.setName("reason").setDescription("Reason").setRequired(false)),
+    new SlashCommandBuilder()
+      .setName("removecoins")
+      .setDescription("Remove coins from a user (admin only)")
+      .addUserOption(opt => opt.setName("user").setDescription("User").setRequired(true))
+      .addIntegerOption(opt => opt.setName("amount").setDescription("Amount").setRequired(true))
+      .addStringOption(opt => opt.setName("reason").setDescription("Reason").setRequired(false)),
+    new SlashCommandBuilder()
+      .setName("usecoins")
+      .setDescription("Spend your coins")
+      .addIntegerOption(opt => opt.setName("amount").setDescription("Amount").setRequired(true))
+      .addStringOption(opt => opt.setName("reason").setDescription("Reason").setRequired(false)),
+    new SlashCommandBuilder().setName("transactions").setDescription("View your recent coin activity"),
+    new SlashCommandBuilder()
+      .setName("checkcoins")
+      .setDescription("Admin: Check a user’s coin balance")
+      .addUserOption(opt => opt.setName("user").setDescription("User").setRequired(true)),
+    new SlashCommandBuilder()
+      .setName("usertransactions")
+      .setDescription("Admin: View a user’s recent transactions")
+      .addUserOption(opt => opt.setName("user").setDescription("User").setRequired(true)),
+  ].map(c => c.toJSON());
+
+  const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
+
+  try {
+    await rest.put(Routes.applicationGuildCommands(DISCORD_CLIENT_ID, GUILD_ID), { body: commands });
+    console.log("✅ Slash commands registered.");
+  } catch (err) {
+    console.error("❌ Failed to register commands:", err);
+  }
+}
+
 client.on("interactionCreate", async (interaction) => {
   if (!interaction.isChatInputCommand()) return;
 
-  const { commandName } = interaction;
+  const command = interaction.commandName;
   const userId = interaction.user.id;
 
-  try {
-    await interaction.deferReply({ ephemeral: true });
+  await interaction.deferReply({ ephemeral: true });
 
-    // ---------- BALANCE ----------
-    if (commandName === "balance") {
+  try {
+    if (command === "balance") {
       const { data } = await supabase
         .from("coin_balances")
         .select("balance")
-        .eq("guild_id", GUILD_ID)
         .eq("user_id", userId)
+        .eq("guild_id", GUILD_ID)
         .single();
 
       const balance = data?.balance ?? 0;
-      return interaction.editReply(`💰 Your balance is **${balance}** coins.`);
+      return interaction.editReply(`💰 You have **${balance}** coins.`);
     }
 
-    // ---------- ADD / REMOVE COINS (ADMIN) ----------
-    if (commandName === "addcoins" || commandName === "removecoins") {
-      if (!adminList.includes(userId)) {
-        return interaction.editReply("❌ Admin only command.");
-      }
-
-      const targetUser = interaction.options.getUser("user", true);
+    if (["addcoins", "removecoins"].includes(command)) {
+      if (!adminList.includes(userId)) return interaction.editReply("❌ No permission.");
+      const user = interaction.options.getUser("user", true);
       const amount = interaction.options.getInteger("amount", true);
-      const reason = interaction.options.getString("reason") || `${commandName} by admin`;
+      const reason = interaction.options.getString("reason") || `${command} by admin`;
 
       const { data } = await supabase
         .from("coin_balances")
         .select("balance")
+        .eq("user_id", user.id)
         .eq("guild_id", GUILD_ID)
-        .eq("user_id", targetUser.id)
         .single();
 
-      const starting = data?.balance ?? 0;
-      const ending =
-        commandName === "addcoins"
-          ? starting + amount
-          : Math.max(starting - amount, 0);
+      const current = data?.balance ?? 0;
+      const newBalance = command === "addcoins" ? current + amount : Math.max(current - amount, 0);
 
       await supabase.from("coin_balances").upsert({
+        user_id: user.id,
         guild_id: GUILD_ID,
-        user_id: targetUser.id,
-        balance: ending,
+        balance: newBalance,
       });
 
       await supabase.from("transactions").insert({
+        user_id: user.id,
         guild_id: GUILD_ID,
-        user_id: targetUser.id,
-        amount: commandName === "addcoins" ? amount : -amount,
+        amount: command === "addcoins" ? amount : -amount,
         reason,
-        starting_balance: starting,
-        ending_balance: ending,
       });
 
       return interaction.editReply(
-        `✅ ${commandName === "addcoins" ? "Added" : "Removed"} **${amount}** coins for ${targetUser}\n💱 ${starting} → ${ending}`
+        `✅ ${command === "addcoins" ? "Added" : "Removed"} **${amount}** coins.\n👤 User: <@${user.id}>\n💰 New Balance: **${newBalance}**`
       );
     }
 
-    // ---------- USE COINS ----------
-    if (commandName === "usecoins") {
+    if (command === "usecoins") {
       const amount = interaction.options.getInteger("amount", true);
       const reason = interaction.options.getString("reason") || "Used coins";
 
       const { data } = await supabase
         .from("coin_balances")
         .select("balance")
-        .eq("guild_id", GUILD_ID)
         .eq("user_id", userId)
+        .eq("guild_id", GUILD_ID)
         .single();
 
-      const starting = data?.balance ?? 0;
-      if (starting < amount) {
-        return interaction.editReply(`❌ Not enough coins. You have **${starting}**.`);
-      }
+      const current = data?.balance ?? 0;
+      if (current < amount) return interaction.editReply(`❌ Not enough coins. You have **${current}**, need **${amount}**.`);
 
-      const ending = starting - amount;
+      const newBalance = current - amount;
 
       await supabase.from("coin_balances").upsert({
-        guild_id: GUILD_ID,
         user_id: userId,
-        balance: ending,
+        guild_id: GUILD_ID,
+        balance: newBalance,
       });
 
       await supabase.from("transactions").insert({
-        guild_id: GUILD_ID,
         user_id: userId,
+        guild_id: GUILD_ID,
         amount: -amount,
         reason,
-        starting_balance: starting,
-        ending_balance: ending,
       });
 
-      return interaction.editReply(`✅ Used **${amount}** coins\n💱 ${starting} → ${ending}`);
+      return interaction.editReply(`✅ You used **${amount}** coins.\n💰 New balance: **${newBalance}**`);
     }
 
-    // ---------- TRANSACTIONS ----------
-    if (commandName === "transactions") {
-      const isAdmin = adminList.includes(userId);
-
-      const query = supabase
+    if (command === "transactions") {
+      const { data } = await supabase
         .from("transactions")
-        .select("user_id, amount, reason, created_at, starting_balance, ending_balance")
+        .select("amount, reason, created_at")
+        .eq("user_id", userId)
         .eq("guild_id", GUILD_ID)
         .order("created_at", { ascending: false })
         .limit(5);
 
-      if (!isAdmin) query.eq("user_id", userId);
+      if (!data?.length) return interaction.editReply("📭 No recent transactions found.");
 
-      const { data } = await query;
+      const history = data
+        .map(tx => {
+          const ts = new Date(tx.created_at).toLocaleString();
+          const sign = tx.amount > 0 ? "+" : "";
+          return `• ${sign}${tx.amount} coins — ${tx.reason} (${ts})`;
+        })
+        .join("\n");
 
-      if (!data || data.length === 0) {
-        return interaction.editReply("📭 No transactions found.");
-      }
-
-      const lines = data.map(tx => {
-        const who = isAdmin ? ` <@${tx.user_id}>` : "";
-        return (
-          `${tx.amount > 0 ? "🟢" : "🔴"} **${tx.amount} coins** — ${tx.reason}${who}\n` +
-          `💱 ${tx.starting_balance} → ${tx.ending_balance}\n` +
-          `🕒 <t:${Math.floor(new Date(tx.created_at).getTime() / 1000)}:R>`
-        );
-      });
-
-      return interaction.editReply(`📜 **Recent Transactions:**\n\n${lines.join("\n\n")}`);
+      return interaction.editReply(`📒 Your last 5 transactions:\n${history}`);
     }
 
+    if (command === "checkcoins") {
+      if (!adminList.includes(userId)) return interaction.editReply("❌ No permission.");
+      const user = interaction.options.getUser("user", true);
+
+      const { data } = await supabase
+        .from("coin_balances")
+        .select("balance")
+        .eq("user_id", user.id)
+        .eq("guild_id", GUILD_ID)
+        .single();
+
+      const balance = data?.balance ?? 0;
+      return interaction.editReply(`👤 <@${user.id}> has **${balance}** coins.`);
+    }
+
+    if (command === "usertransactions") {
+      if (!adminList.includes(userId)) return interaction.editReply("❌ No permission.");
+      const user = interaction.options.getUser("user", true);
+
+      const { data } = await supabase
+        .from("transactions")
+        .select("amount, reason, created_at")
+        .eq("user_id", user.id)
+        .eq("guild_id", GUILD_ID)
+        .order("created_at", { ascending: false })
+        .limit(5);
+
+      if (!data?.length) return interaction.editReply(`📭 No transactions found for <@${user.id}>.`);
+
+      const txList = data
+        .map(tx => {
+          const ts = new Date(tx.created_at).toLocaleString();
+          const sign = tx.amount > 0 ? "+" : "";
+          return `• ${sign}${tx.amount} coins — ${tx.reason} (${ts})`;
+        })
+        .join("\n");
+
+      return interaction.editReply(`📒 Last 5 transactions for <@${user.id}>:\n${txList}`);
+    }
+
+    return interaction.editReply("❌ Unknown command.");
   } catch (err) {
-    console.error("❌ Command error:", err);
-    await interaction.editReply("❌ Something went wrong.");
+    console.error("⚠️ Command Error:", err);
+    if (interaction.isRepliable()) {
+      try {
+        await interaction.editReply("❌ Something went wrong.");
+      } catch {}
+    }
   }
 });
 
-// ---------- KEEP ALIVE ----------
-app.get("/", (_, res) => res.send("Coin Bank Bot is running ✅"));
-app.listen(PORT, () => console.log(`🌐 Web server running on port ${PORT}`));
+// Web Keep-alive
+app.get("/", (req, res) => res.send("Coin Bank Bot is running ✅"));
+app.listen(PORT, () => console.log(`🌐 Listening on port ${PORT}`));
 
-// ---------- LOGIN ----------
 client.login(DISCORD_TOKEN);
