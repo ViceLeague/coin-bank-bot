@@ -1,68 +1,72 @@
 import { REST, Routes } from "discord.js";
-import "dotenv/config";
 
-const { DISCORD_TOKEN, DISCORD_CLIENT_ID, GUILD_ID } = process.env;
+const token = process.env.DISCORD_TOKEN;
+const clientId = process.env.DISCORD_CLIENT_ID;
+const guildId = process.env.GUILD_ID;
 
-if (!DISCORD_TOKEN || !DISCORD_CLIENT_ID || !GUILD_ID) {
-  console.error("❌ Missing env vars");
+if (!token || !clientId || !guildId) {
+  console.error("Missing env vars. Need DISCORD_TOKEN, DISCORD_CLIENT_ID, GUILD_ID");
   process.exit(1);
 }
 
 const commands = [
-  { name: "balance", description: "Check your coin balance" },
+  {
+    name: "balance",
+    description: "Check your coin balance",
+  },
   {
     name: "addcoins",
     description: "Add coins to a user (admin only)",
     options: [
-      { name: "user", type: 6, description: "User", required: true },
-      { name: "amount", type: 4, description: "Amount", required: true },
-      { name: "reason", type: 3, description: "Reason", required: false },
+      { name: "user", description: "User", type: 6, required: true },
+      { name: "amount", description: "Amount of coins", type: 4, required: true },
+      { name: "reason", description: "Reason", type: 3, required: false },
     ],
   },
   {
     name: "removecoins",
     description: "Remove coins from a user (admin only)",
     options: [
-      { name: "user", type: 6, description: "User", required: true },
-      { name: "amount", type: 4, description: "Amount", required: true },
-      { name: "reason", type: 3, description: "Reason", required: false },
+      { name: "user", description: "User", type: 6, required: true },
+      { name: "amount", description: "Amount of coins", type: 4, required: true },
+      { name: "reason", description: "Reason", type: 3, required: false },
     ],
   },
   {
     name: "usecoins",
-    description: "Spend your coins",
+    description: "Spend coins (tournament entry)",
     options: [
-      { name: "amount", type: 4, description: "Amount", required: true },
-      { name: "reason", type: 3, description: "Reason", required: false },
+      { name: "amount", description: "Amount of coins", type: 4, required: true },
+      { name: "reason", description: "Reason", type: 3, required: false },
     ],
   },
-  { name: "transactions", description: "View your recent coin activity" },
+  {
+    name: "transactions",
+    description: "View your recent coin activity",
+  },
   {
     name: "checkcoins",
-    description: "Admin: Check a user's coin balance",
-    options: [{ name: "user", type: 6, description: "User", required: true }],
+    description: "Check a user's coin balance (admin only)",
+    options: [{ name: "user", description: "User", type: 6, required: true }],
   },
   {
     name: "usertransactions",
-    description: "Admin: View a user's transactions",
-    options: [{ name: "user", type: 6, description: "User", required: true }],
+    description: "View a user's transaction history (admin only)",
+    options: [{ name: "user", description: "User", type: 6, required: true }],
   },
   {
     name: "clearbuyers",
-    description: "Admin: Remove Buyer role from everyone",
+    description: "Remove Buyer role from all users (admin only)",
   },
 ];
 
-const rest = new REST({ version: "10" }).setToken(DISCORD_TOKEN);
+const rest = new REST({ version: "10" }).setToken(token);
 
 (async () => {
   try {
-    console.log("🔁 Registering slash commands...");
-    await rest.put(
-      Routes.applicationGuildCommands(DISCORD_CLIENT_ID, GUILD_ID),
-      { body: commands }
-    );
-    console.log("✅ Commands registered");
+    console.log("Registering slash commands...");
+    await rest.put(Routes.applicationGuildCommands(clientId, guildId), { body: commands });
+    console.log("✅ Slash commands registered!");
     process.exit(0);
   } catch (err) {
     console.error(err);
