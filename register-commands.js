@@ -13,47 +13,43 @@ const commands = [
   },
   {
     name: 'addcoins',
-    description: 'Add coins to a user (admin only)',
+    description: 'Add coins to a user',
     options: [
-      { name: 'user', type: 6, description: 'User to add coins to', required: true },
-      { name: 'amount', type: 4, description: 'Amount of coins', required: true },
-      { name: 'reason', type: 3, description: 'Reason', required: false },
+      { name: 'user', description: 'User', type: 6, required: true },
+      { name: 'amount', description: 'Amount to add', type: 4, required: true },
+      { name: 'reason', description: 'Reason', type: 3, required: false },
     ],
   },
   {
     name: 'removecoins',
-    description: 'Remove coins from a user (admin only)',
+    description: 'Remove coins from a user',
     options: [
-      { name: 'user', type: 6, description: 'User to remove coins from', required: true },
-      { name: 'amount', type: 4, description: 'Amount of coins to remove', required: true },
-      { name: 'reason', type: 3, description: 'Reason', required: false },
-    ],
-  },
-  {
-    name: 'usecoins',
-    description: 'Spend your coins',
-    options: [
-      { name: 'amount', type: 4, description: 'Amount of coins to use', required: true },
-      { name: 'reason', type: 3, description: 'Reason', required: false },
+      { name: 'user', description: 'User', type: 6, required: true },
+      { name: 'amount', description: 'Amount to remove', type: 4, required: true },
+      { name: 'reason', description: 'Reason', type: 3, required: false },
     ],
   },
   {
     name: 'transactions',
-    description: 'View your recent coin transactions',
-  },
-  {
-    name: 'checkcoins',
-    description: 'Admin: Check a user\'s coin balance',
-    options: [{ name: 'user', type: 6, description: 'User to check', required: true }],
+    description: 'See your last 5 transactions',
   },
   {
     name: 'usertransactions',
-    description: 'Admin: View a user\'s transactions',
-    options: [{ name: 'user', type: 6, description: 'User to check', required: true }],
+    description: 'See another user’s last 5 transactions (admin)',
+    options: [
+      { name: 'user', description: 'User', type: 6, required: true },
+    ],
+  },
+  {
+    name: 'checkcoins',
+    description: 'Check a user’s balance (admin)',
+    options: [
+      { name: 'user', description: 'User', type: 6, required: true },
+    ],
   },
   {
     name: 'clearbuyers',
-    description: 'Remove the Buyer role from all users (admin only)',
+    description: 'Remove Buyer role from everyone (admin)',
   },
 ];
 
@@ -64,7 +60,9 @@ const rest = new REST({ version: '10' }).setToken(token);
     console.log('Registering slash commands...');
     await rest.put(Routes.applicationGuildCommands(clientId, guildId), { body: commands });
     console.log('✅ Slash commands registered!');
+    process.exit(0);
   } catch (error) {
     console.error('❌ Failed to register commands:', error);
+    process.exit(1);
   }
 })();
